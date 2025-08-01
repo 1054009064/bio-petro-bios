@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       updated: ${{ steps.check.outputs.updated }}
+      DOWNLOAD_URL: ${{ env.DOWNLOAD_URL }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@main
@@ -91,7 +92,7 @@ jobs:
         if: steps.check.outputs.updated == 'true'
         run: |
           git add _worker.js version
-          git commit -s -S -m "🔄 Auto-sync latest Worker version: ${{ env.TAG_NAME }}"
+          git commit -s -S -m "🔄 Auto-sync latest Worker version: \`${{ env.TAG_NAME }}\`"
           git push --force
 
   refresh-worker:
@@ -104,7 +105,7 @@ jobs:
 
       - name: Download worker.zip
         run: |
-          curl -L -o worker.zip https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/latest/download/worker.zip
+          curl -L -o worker.zip ${{ needs.update-worker.outputs.DOWNLOAD_URL }}
 
       - name: Unzip worker.zip
         run: |
@@ -139,5 +140,5 @@ jobs:
         run: |
           git add _worker.js
           time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-          git commit -s -S -m "🔄 Refreshed _worker.js on $time"
+          git commit -s -S -m "🔄 Refreshed \`_worker.js\` on \`$time\`"
           git push --force
