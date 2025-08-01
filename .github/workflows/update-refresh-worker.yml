@@ -1,0 +1,143 @@
+name: Auto Update And Refresh Worker
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: 0 */6 * * *
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-worker:
+    runs-on: ubuntu-latest
+    outputs:
+      updated: ${{ steps.check.outputs.updated }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@main
+
+      - name: Get Current Local Version
+        id: get_local_version
+        run: |
+          echo "Getting Local Version"
+          if [ -f version ]; then
+            LOCAL_VERSION=$(cat version)
+            echo "Current local version: $LOCAL_VERSION"
+          else
+            echo "First sync, no local version found"
+            LOCAL_VERSION=""
+          fi
+          echo "LOCAL_VERSION=$LOCAL_VERSION" >> $GITHUB_ENV
+
+      - name: Get Latest Release Information
+        id: get_release
+        run: |
+          echo "Getting Latest Release"
+          API_URL="https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases"
+          RESPONSE=$(curl -s "$API_URL")
+          LATEST_RELEASE=$(echo "$RESPONSE" | jq -r '.[0]')
+          TAG_NAME=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name == "worker.zip") | .browser_download_url')
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+            echo "worker.zip not found, exiting..."
+            exit 1
+          fi
+          echo "Latest version number: $TAG_NAME"
+          echo "DOWNLOAD_URL=$DOWNLOAD_URL" >> $GITHUB_ENV
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+
+      - name: Check For Updates
+        id: check
+        run: |
+          if [ "$LOCAL_VERSION" = "$TAG_NAME" ]; then
+            echo "Already the latest version, no need to update"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New version found, update required"
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import GPG Key
+        if: steps.check.outputs.updated == 'true'
+        uses: crazy-max/ghaction-import-gpg@master
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          git_config_global: true
+          git_committer_name: "1054009064"
+          git_committer_email: "44148148+1054009064@users.noreply.github.com"
+
+      - name: Clean Old Files And Download New Version
+        if: steps.check.outputs.updated == 'true'
+        run: |
+          echo "Cleaning Old Files"
+          rm -rf ./*
+          echo "Downloading Latest worker.zip"
+          curl -L -o worker.zip "$DOWNLOAD_URL"
+          echo "Unzipping worker.zip"
+          unzip -o worker.zip
+          echo "Deleting worker.zip"
+          rm -f worker.zip
+          echo "Recording New Version Number"
+          echo "$TAG_NAME" > version
+
+      - name: Commit And Push
+        if: steps.check.outputs.updated == 'true'
+        run: |
+          git add _worker.js version
+          git commit -s -S -m "🔄 Auto-sync latest Worker version: ${{ env.TAG_NAME }}"
+          git push --force
+
+  refresh-worker:
+    needs: update-worker
+    if: needs.update-worker.outputs.updated == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@main
+
+      - name: Download worker.zip
+        run: |
+          curl -L -o worker.zip https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/latest/download/worker.zip
+
+      - name: Unzip worker.zip
+        run: |
+          unzip -o worker.zip
+          rm -f worker.zip
+
+      - name: Check For Changes
+        id: check
+        run: |
+          if git diff --quiet; then
+            echo "Nothing to commit, working tree clean"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "There's a difference, continue adding commit"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import GPG Key
+        if: steps.check.outputs.changed == 'true'
+        uses: crazy-max/ghaction-import-gpg@master
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+          git_config_global: true
+          git_committer_name: "1054009064"
+          git_committer_email: "44148148+1054009064@users.noreply.github.com"
+
+      - name: Commit And Push
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git add _worker.js
+          time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          git commit -s -S -m "🔄 Refreshed _worker.js on $time"
+          git push --force
